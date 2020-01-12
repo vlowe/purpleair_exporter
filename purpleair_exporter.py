@@ -1,37 +1,39 @@
+from collections import namedtuple
 from datetime import datetime, timezone
+
 import time
 import requests
 
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
-location_ids = [
-    "16831",  # Balmain
-    "23033",  # Milson's Point
-]
+Location = namedtuple("Location", ["id", "name"])
+locations = [Location("16831", "Balmain"), Location("23033", "Milson's Point")]
+locations_index = {l.id: l for l in locations}
 
-url = "https://www.purpleair.com/json?show=" + "|".join(location_ids)
+url = "https://www.purpleair.com/json?show=" + "|".join([l.id for l in locations])
 
 session = requests.Session()
 
 
 class PACollector:
     def collect(self):
+        common_labels = ["id", "location", "name", "channel"]
         purpleair_utctimestamp = GaugeMetricFamily(
             "purpleair_utctimestamp",
             documentation="UTC timestamp from Purple Air (in Unix epoch)",
-            labels=["location", "id", "channel"],
+            labels=common_labels,
         )
 
         purpleair_particulate_matter_standard = GaugeMetricFamily(
             name="purpleair_particulate_matter_standard",
             documentation="Particulate matter µg/m3 from Purple Air",
-            labels=["location", "id", "channel", "microns"],
+            labels=common_labels + ["microns"],
         )
         purpleair_particulate_matter_environmental = GaugeMetricFamily(
             name="purpleair_particulate_matter_environmental",
             documentation="Particulate matter µg/m3 from Purple Air",
-            labels=["location", "id", "channel", "microns"],
+            labels=common_labels + ["microns"],
         )
 
         response = session.get(url)
@@ -49,10 +51,17 @@ class PACollector:
 
         for sensor in sensors:
             if sensor.get("ParentID"):
-                labels = [sensor["Label"], str(sensor["ID"]), "B"]
+                channel = "B"
+                parent_id = str(sensor["ParentID"])
             else:
-                labels = [sensor["Label"], str(sensor["ID"]), "A"]
-
+                channel = "A"
+                parent_id = str(sensor["ID"])
+            labels = [
+                str(sensor["ID"]),
+                sensor["Label"],
+                locations_index[parent_id].name,
+                channel,
+            ]
             purpleair_utctimestamp.add_metric(labels, unix_epoch)
             # PurpleAir mixed up cf=atm (atmospheric) and cf=1 (standard) so we swap them back.
             # See https://docs.google.com/document/d/15ijz94dXJ-YAZLi9iZ_RaBwrZ4KtYeCy08goGBwnbCU/edit.
